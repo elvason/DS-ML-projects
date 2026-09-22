@@ -12,6 +12,10 @@ STEAMSPY_URL = "https://steamspy.com/api.php"
 STEAM_REVIEWS_URL = "https://store.steampowered.com/appreviews/{app_id}"
 REVIEW_FIELDS = (
   "app_id",
+  "game_name",
+  "players_2weeks",
+  "average_2weeks",
+  "ccu",
   "recommendationid",
   "language",
   "review",
@@ -27,8 +31,8 @@ REVIEW_FIELDS = (
 )
 
 
-def get_appids(session: requests.Session, game_count: int) -> list[str]:
-  """Return app IDs for the games with the most players in the last two weeks."""
+def get_games(session: requests.Session, game_count: int) -> list[dict[str, Any]]:
+  """Return popular game IDs and names from the last two weeks."""
   response = session.get(
     STEAMSPY_URL,
     params={"request": "top100in2weeks"},
@@ -36,7 +40,16 @@ def get_appids(session: requests.Session, game_count: int) -> list[str]:
   )
   response.raise_for_status()
   games = response.json()
-  return list(games)[:game_count]
+  return [
+    {
+      "app_id": app_id,
+      "game_name": game.get("name", "Unknown"),
+      "players_2weeks": game.get("players_2weeks"),
+      "average_2weeks": game.get("average_2weeks"),
+      "ccu": game.get("ccu"),
+    }
+    for app_id, game in list(games.items())[:game_count]
+  ]
 
 
 def get_reviews(
@@ -88,13 +101,17 @@ def scrape_reviews(
   """Scrape reviews and return the number of rows written."""
   session = requests.Session()
   session.headers.update({"User-Agent": "steam-sentiment-analysis/1.0"})
-  app_ids = get_appids(session, game_count)
+  games = get_games(session, game_count)
   rows: list[dict[str, Any]] = []
 
-  for index, app_id in enumerate(app_ids, start=1):
-    print(f"Fetching game {index}/{len(app_ids)} (app {app_id})...")
-    rows.extend(get_reviews(session, app_id, reviews_per_game))
-    if index < len(app_ids):
+  for index, game in enumerate(games, start=1):
+    print(f"Fetching game {index}/{len(games)} (app {game['app_id']})...")
+    game_reviews = get_reviews(session, game["app_id"], reviews_per_game)
+    for review in game_reviews:
+      for field in ("game_name", "players_2weeks", "average_2weeks", "ccu"):
+        review[field] = game[field]
+    rows.extend(game_reviews)
+    if index < len(games):
       time.sleep(delay_seconds)
 
   with open(output_path, "w", newline="", encoding="utf-8") as output_file:
